@@ -8,6 +8,7 @@ import { toolHandler } from "../utils/tool-helpers.js";
 import { moduleRegistrar, type ToolRegistry } from "./registry.js";
 import { formatSize, formatSizeMB, formatSizeGB, formatUnixTimestamp } from "../utils/format.js";
 import { resolveImageId } from "../utils/image-resolver.js";
+import { formatEnrichedUpdateCheck } from "../utils/version-enrichment.js";
 import { DOCKER_DIGEST_PREFIX_LENGTH, DOCKER_SHORT_ID_LENGTH } from "../constants.js";
 import type { Image } from "../types/arcane-types.js";
 
@@ -246,6 +247,7 @@ export function registerImageTools(server: McpServer, registry?: ToolRegistry): 
       const response = await client.get<{
         data: {
           hasUpdate: boolean;
+          updateType?: string;
           currentVersion?: string;
           latestVersion?: string;
           currentDigest?: string;
@@ -253,14 +255,7 @@ export function registerImageTools(server: McpServer, registry?: ToolRegistry): 
         };
       }>(`/environments/${environmentId}/image-updates/check`, { imageRef: image });
 
-      const u = response.data;
-      if (u.hasUpdate) {
-        const current = u.currentVersion || u.currentDigest?.substring(0, DOCKER_DIGEST_PREFIX_LENGTH + DOCKER_SHORT_ID_LENGTH) || "unknown";
-        const latest = u.latestVersion || u.latestDigest?.substring(0, DOCKER_DIGEST_PREFIX_LENGTH + DOCKER_SHORT_ID_LENGTH) || "unknown";
-        return `Update available for ${image}!\n  Current: ${current}\n  Latest: ${latest}`;
-      } else {
-        return `${image} is up to date.`;
-      }
+      return formatEnrichedUpdateCheck(client, environmentId, image, response.data);
     })
   );
 

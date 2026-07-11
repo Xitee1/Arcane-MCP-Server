@@ -115,8 +115,9 @@ For Docker Swarm clusters:
 To see what has pending updates, use the cached results — do not check images individually:
 
 1. `arcane_project_list` with `updates: "has_update"` — compose projects with outdated images (lists the exact image refs)
-2. `arcane_image_update_get_summary` — environment-wide counts
-3. `arcane_image_update_check_all` — refresh the cache in the background if results are stale (track via `arcane_activity_list`)
+2. `arcane_image_update_check_multiple` with those refs — translates digests into version numbers (e.g. `33.0.3 → 34.0.1`) via registry labels
+3. `arcane_image_update_get_summary` — environment-wide counts
+4. `arcane_image_update_check_all` — refresh the cache in the background if results are stale (track via `arcane_activity_list`)
 
 Then update:
 

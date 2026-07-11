@@ -6,27 +6,30 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { toolHandler } from "../utils/tool-helpers.js";
 import { moduleRegistrar, type ToolRegistry } from "./registry.js";
+import { formatEnrichedUpdateCheck, resolveVersions } from "../utils/version-enrichment.js";
 import type { ImageUpdateResponse, BatchImageUpdateResponse, ImageUpdateSummary } from "../types/arcane-types.js";
 
-function formatUpdateCheck(imageRef: string, u: ImageUpdateResponse): string {
-  if (u.error) {
-    return `Check failed for ${imageRef}: ${u.error}`;
-  }
-  if (u.hasUpdate) {
-    const current = u.currentVersion || u.currentDigest?.substring(0, 19) || "unknown";
-    const latest = u.latestVersion || u.latestDigest?.substring(0, 19) || "unknown";
-    const note = u.updateType === "digest"
-      ? " (digest update: the pinned tag points to new image content — Arcane does not resolve newer version tags)"
-      : ` (${u.updateType || "update"})`;
-    return `Update available for ${imageRef}!${note}\n  Current: ${current}\n  Latest: ${latest}`;
-  }
-  return `${imageRef} is up to date.`;
-}
+const BATCH_ENRICH_LIMIT = 10;
 
-function formatBatchResults(batch: BatchImageUpdateResponse): string {
+async function formatBatchResults(
+  client: Parameters<typeof resolveVersions>[0],
+  environmentId: string,
+  batch: BatchImageUpdateResponse
+): Promise<string> {
   const entries = Object.entries(batch);
   const updates = entries.filter(([, r]) => r.hasUpdate);
   const errors = entries.filter(([, r]) => r.error);
+
+  // Translate digests into versions for the first few updates (best-effort, parallel)
+  const versionByRef = new Map<string, string>();
+  await Promise.allSettled(
+    updates.slice(0, BATCH_ENRICH_LIMIT).map(async ([ref]) => {
+      const v = await resolveVersions(client, environmentId, ref);
+      if (v.local || v.remote) {
+        versionByRef.set(ref, `${v.local || "?"} → ${v.remote || "?"}`);
+      }
+    })
+  );
 
   const lines = [
     `Checked ${entries.length} images: ${updates.length} updates available\n`,
@@ -34,9 +37,13 @@ function formatBatchResults(batch: BatchImageUpdateResponse): string {
 
   for (const [ref, result] of entries) {
     const status = result.error ? "[ERROR]" : result.hasUpdate ? "[UPDATE]" : "[OK]";
-    lines.push(`${status} ${ref}${result.error ? `: ${result.error}` : ""}`);
+    const versions = versionByRef.has(ref) ? ` (${versionByRef.get(ref)})` : "";
+    lines.push(`${status} ${ref}${versions}${result.error ? `: ${result.error}` : ""}`);
   }
 
+  if (updates.length > BATCH_ENRICH_LIMIT) {
+    lines.push(`\n(Version resolution limited to the first ${BATCH_ENRICH_LIMIT} updates.)`);
+  }
   if (updates.length === 0 && errors.length === 0) {
     lines.push("\nAll images are up to date.");
   }
@@ -70,7 +77,7 @@ export function registerImageUpdateTools(server: McpServer, registry?: ToolRegis
         { imageRef }
       );
 
-      return formatUpdateCheck(imageRef, response.data);
+      return formatEnrichedUpdateCheck(client, environmentId, imageRef, response.data);
     })
   );
 
@@ -96,7 +103,13 @@ export function registerImageUpdateTools(server: McpServer, registry?: ToolRegis
         `/environments/${environmentId}/image-updates/check/${imageId}`
       );
 
-      return formatUpdateCheck(imageId, response.data);
+      // Resolve the image's tag so versions can be looked up in the registry
+      const detail = await client
+        .get<{ data: { repoTags?: string[] | null } }>(`/environments/${environmentId}/images/${imageId}`)
+        .catch(() => undefined);
+      const imageRef = detail?.data.repoTags?.[0] || imageId;
+
+      return formatEnrichedUpdateCheck(client, environmentId, imageRef, response.data);
     })
   );
 
@@ -123,7 +136,7 @@ export function registerImageUpdateTools(server: McpServer, registry?: ToolRegis
         { imageRefs }
       );
 
-      return formatBatchResults(response.data || {});
+      return formatBatchResults(client, environmentId, response.data || {});
     })
   );
 
